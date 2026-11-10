@@ -1,6 +1,6 @@
 # ESP32-S3 CSI 串口实时采集与数据集工具
 
-把 ESP32-S3 通过串口（921600 8N1）输出的 esp-csi CSV 数据**实时**采集为
+把 ESP32-S3 通过串口（2000000 8N1）输出的 esp-csi CSV 数据**实时**采集为
 深度学习数据集，方便 Python / MATLAB 处理与可视化。
 
 ```
@@ -22,9 +22,11 @@ csi_log/           collect_dataset 标注日志与质量报告目录（自动创
 
 本目录用 [uv](https://docs.astral.sh/uv/) 管理 Python 环境与依赖，所有东西都收敛在
 `serial/` 之内（`.venv/`、`uv.lock`），不影响项目的 ESP-IDF 环境。依赖定义见
-`pyproject.toml`（pyserial / numpy / matplotlib / scipy）。
+`pyproject.toml`（pyserial / numpy / matplotlib / scipy / pyside6——最后者为
+`--plot` 提供 GUI 后端，Windows 与 Linux 通用）。
 
 ```bat
+:: Windows
 :: 1. 安装 uv（已装可跳过；验证：uv --version）
 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
@@ -35,6 +37,23 @@ uv sync
 :: 3. 之后运行任何脚本都用 uv run（自动使用 .venv）
 uv run python csi_logger.py --help
 ```
+
+```bash
+# Linux（Ubuntu 等）
+# 1. 安装 uv（已装可跳过；验证：uv --version）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. 同步环境：首次自动创建 .venv 并安装全部依赖
+cd ~/dev/esp-csi/serial
+uv sync
+
+# 3. 之后运行任何脚本都用 uv run（自动使用 .venv）
+uv run python csi_logger.py --help
+```
+
+> **Linux 串口权限**：板子在 Ubuntu 上挂为 `/dev/ttyACM0`（CH343 CDC 模式），
+> 默认属组为 `dialout`，需把自己加进该组并重新登录后才能打开串口：
+> `sudo usermod -aG dialout $USER`（查看：`id -nG | grep dialout`）。
 
 依赖变更后（改 pyproject.toml）再次 `uv sync` 即可。也可用 `uv add 包名` /
 `uv remove 包名` 直接增删。
@@ -62,9 +81,9 @@ uv run python csi_logger.py --duration 60 --mat
 
 | 参数 | 说明 |
 | --- | --- |
-| `--port COMx` | 手动指定串口（默认自动选 CH343/CH340/CH341 口；多个候选时逐个探测 2s，选真正在发 CSI_DATA 的口） |
+| `--port COMx` | 手动指定串口（Windows: `COMx`；Linux: `/dev/ttyACM0` 等；默认自动选 CH343/CH340/CH341 口——Linux 上 CH343 走 CDC-ACM 挂为 `ttyACM*`，按 VID 1a86 识别；多个候选时逐个探测 2s，选真正在发 CSI_DATA 的口） |
 | `--label 名称` | 本次采集的初始标签（写入文件名和 label 列） |
-| `--labels a,b,c` | 标签面板；采集中按数字键 0-9 切换（逐包记录在 label 列） |
+| `--labels a,b,c` | 标签面板；采集中按数字键 0-9 切换（逐包记录在 label 列）。Windows/Linux 均支持（Linux 需在前台终端运行） |
 | `--duration 秒` | 定时结束（0 = 手动 Ctrl-C/q） |
 | `--plot` | 实时绘图（瀑布图为 HT-LTF 段幅度） |
 | `--all-ltfs` | npz/mat 不做段裁剪：三段固件（len=384）保存全部三段（192 子载波）；单段固件（len=128/256）数据本就完整，此参数无效果 |
@@ -150,6 +169,7 @@ uv run python collect_dataset.py session_A          :: 先跑空房间基线
 uv run python collect_dataset.py session_B          :: 单人 HAR + 暴力模拟
 uv run python collect_dataset.py -r 3 session_B     :: 重复 3 次
 uv run python collect_dataset.py session_D 3        :: 3 人检测
+uv run python collect_dataset.py session_B --plot   :: 带实时绘图（瀑布图）
 ```
 
 每个**动作**生成一组独立文件（`csi_<时间戳>_<session>_<5位序号>_<动作名>` 前缀，
@@ -189,9 +209,16 @@ session_end, 1762314710.000, session_B
   仅 HT-LTF（len=256，~1.0KB）→ ~91Hz；仅 LLTF（len=128，~0.6KB）→ ~160Hz。
   解决：`idf.py menuconfig` → `Component config` → `ESP-STDIO` →
   `UART console baud rate` 提到 `2000000`（上限 ~190Hz；注意 IDF v6.1 该选项
-  在 ESP-STDIO 菜单，不在 ESP System Settings），重新烧录接收板，采集时加
-  `--baud 2000000`。
-* **串口打开失败**：端口被占用（关掉 MobaXterm），或口不对（`--list-ports` 查看，`--port` 指定）。
+  在 ESP-STDIO 菜单，不在 ESP System Settings），重新烧录接收板（采集端
+  `--baud 2000000`，现已是默认值）。
+* **串口打开失败**：端口被占用（关掉 MobaXterm 等），或口不对（`--list-ports` 查看，`--port` 指定）。
+  Linux 下报 `Permission denied`：把自己加入 `dialout` 组并重新登录
+  （`sudo usermod -aG dialout $USER`）。
+* **`--plot` 无窗口（Linux）**：uv 管理的 Python 不带 tkinter 时 matplotlib 退到
+  无窗口的 Agg 后端。`uv sync` 安装 pyside6 后自动用 QtAgg；若报 Qt 平台插件
+  错误（`xcb` 找不到），补系统库：`sudo apt install libxcb-cursor0`。
+* **Linux 下 `--list-ports` 列出大量 ttyS***：主板遗留串口，非 USB 设备，忽略即可；
+  CH34x 已自动排在最前并带 `[CH34x]` 标记。
 * **包速率偏低/积压警告**：处理速度跟不上。建议关掉 `--plot`、加大 `--save-interval`；固件日志（compensate_gain 行）较多属正常，已自动过滤。
 * **多块板子同时插着**：程序会自动探测每块板是否在发 CSI 数据（各等 2s），选中的口会打印出来；也可 `--port` 指定。
 * **为什么 raw.csv 和 data.csv 各一份**：raw.csv 忠实存档原始行（含被丢弃的坏行，便于排查），data.csv 是清洗后的数值表。

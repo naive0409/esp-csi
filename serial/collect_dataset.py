@@ -18,7 +18,7 @@
   uv run python collect_dataset.py session_B
   uv run python collect_dataset.py -r 3 session_B
   uv run python collect_dataset.py session_D 3
-可选：--port COMx --prompt-time 1 --expected-rate 100 --gap-threshold 0.5
+可选：--port COMx --plot --prompt-time 1 --expected-rate 100 --gap-threshold 0.5
       --dat-dir csi_actions --log-dir csi_log --all-ltfs --mat
 
 采集建议：每天先跑 session_A（空房间基线，串口首开的增益基线由它覆盖）。
@@ -341,6 +341,9 @@ def parse_args():
                     help=f'波特率（默认 {DEFAULT_BAUD}）')
     ap.add_argument('--probe-timeout', type=float, default=2.0,
                     help='多串口候选时每个口的探测时长秒（默认 2）')
+    ap.add_argument('--plot', action='store_true',
+                    help='实时绘图（同 csi_logger --plot：HT-LTF 瀑布图 + '
+                         '当前包子载波幅度曲线，需要 GUI 后端）')
     ap.add_argument('--prompt-time', type=float, default=1.0,
                     help='每动作前大字提示停留秒数（默认 1，与参考脚本一致）')
     ap.add_argument('--expected-rate', type=float, default=100.0,
@@ -396,7 +399,8 @@ def main():
                              probe_timeout=args.probe_timeout,
                              all_ltfs=args.all_ltfs, save_mat=args.mat,
                              gap_threshold=args.gap_threshold,
-                             expected_rate=args.expected_rate)
+                             expected_rate=args.expected_rate,
+                             plot=args.plot)
     print('打开串口（整个采集过程只开一次，请耐心等待首包稳定）...')
     collector.open()
     print(f'串口就绪: {collector.device} @ {args.baud}\n')

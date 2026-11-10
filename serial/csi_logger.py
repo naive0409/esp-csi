@@ -49,19 +49,38 @@ try:
 except ImportError:
     HAS_MSVCRT = False
 
+try:
+    import atexit
+    import select as _select
+    import termios
+    import tty
+    HAS_TERMIOS = True   # POSIX 键盘非阻塞读取（Linux/macOS）
+except ImportError:
+    HAS_TERMIOS = False
+
 # 让本目录下的 csi_parse 在任意工作目录下都能导入
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from csi_parse import HEADER_LINE, LTF_SEGMENTS, is_csi_line, parse_csi_line
 
-DEFAULT_BAUD = 921600
+DEFAULT_BAUD = 2000000
 DEFAULT_OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'csi_sessions')
-PLOT_REFRESH = 0.2      # 实时绘图刷新周期（秒）
+PLOT_REFRESH = 0.25     # 实时绘图刷新周期（秒）
 PLOT_HISTORY = 200      # 热力图保留的包数
 
 
 # ---------------------------------------------------------------- 串口选择
 
+WCH_VID = 0x1a86          # 沁恒（WCH）USB VID：CH340/CH341/CH343
+
 def _is_ch34x(port):
+    """识别 CH34x 串口。
+
+    Windows 按描述串匹配（"USB-Enhanced-SERIAL CH343"）；Linux 下 CH343
+    （VID:PID 1a86:55d3）由 cdc_acm 驱动挂为 /dev/ttyACM0，描述为
+    "USB Single Serial"，不含 CH343 字样，故同时按 VID 匹配。
+    """
+    if getattr(port, 'vid', None) == WCH_VID:
+        return True
     desc = (port.description or '').upper()
     return any(k in desc for k in ('CH343', 'CH340', 'CH341'))
 
@@ -94,7 +113,8 @@ def autodetect_port(baud, probe_timeout):
         print('未找到 CH343/CH340/CH341 串口设备。当前系统串口：')
         for p in list_all_ports():
             print(f'  {p.device:10s} {p.description}')
-        print('请插好开发板，或用 --port COMx 手动指定。')
+        print('请插好开发板，或用 --port 手动指定（Windows: COMx；'
+              'Linux: /dev/ttyACM0 等）。')
         sys.exit(1)
 
     if len(candidates) == 1:
@@ -111,6 +131,51 @@ def autodetect_port(baud, probe_timeout):
         print(' 无数据')
     print('没有端口探测到 CSI 数据，使用第一个候选口（可用 --port 覆盖）。')
     return candidates[0].device
+
+
+# ---------------------------------------------------------------- 键盘输入
+
+def make_key_reader():
+    """构造非阻塞读键函数（有键→1 字符 str，无键→None）；不可用时返回 None。
+
+    Windows 走 msvcrt；Linux/macOS 走 termios cbreak + select，行为一致
+    （数字键切标签 / q 结束；cbreak 下 Ctrl-C 仍可中断）。stdin 不是终端
+    （重定向/管道）时禁用按键，不影响正常采集。
+    """
+    if HAS_MSVCRT:
+        def read_key():
+            if msvcrt.kbhit():
+                return msvcrt.getwch()
+            return None
+        return read_key
+
+    if HAS_TERMIOS:
+        try:
+            if not sys.stdin.isatty():
+                return None
+            fd = sys.stdin.fileno()
+            old_attr = termios.tcgetattr(fd)
+            tty.setcbreak(fd)
+        except (termios.error, ValueError, OSError):
+            return None
+
+        def restore():
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+            except Exception:
+                pass
+        atexit.register(restore)
+
+        def read_key():
+            ready, _, _ = _select.select([fd], [], [], 0)
+            if not ready:
+                return None
+            # os.read 直读 fd，绕开 TextIOWrapper 缓冲；select 已确认有数据，
+            # cbreak 模式下不会阻塞。一次取首字符（多键连击余下丢弃，无碍）。
+            return os.read(fd, 64).decode('utf-8', 'ignore')[:1] or None
+        return read_key
+
+    return None
 
 
 # ---------------------------------------------------------------- 数据落盘
@@ -264,10 +329,42 @@ class DatasetWriter:
 
 # ---------------------------------------------------------------- 实时绘图
 
+GUI_BACKENDS = ('QtAgg', 'TkAgg')   # 依次尝试的交互式后端
+
+
+def _use_gui_backend():
+    """确保 matplotlib 使用交互式 GUI 后端（--plot 必须有窗口）。
+
+    桌面环境下 matplotlib 通常已自动选中 TkAgg/QtAgg，直接返回；退回 Agg
+    （如 uv 管理的 Python 不带 tkinter）时，按候选顺序检测绑定库并切换。
+    全部缺失则抛错（open() 会捕获并降级为无绘图继续采集）。
+    """
+    import matplotlib
+    if matplotlib.get_backend().lower() != 'agg':
+        return
+    for backend in GUI_BACKENDS:
+        try:
+            if backend == 'QtAgg':
+                try:
+                    import PySide6  # noqa: F401
+                except ImportError:
+                    import PyQt6    # noqa: F401
+            else:
+                import tkinter  # noqa: F401
+        except ImportError:
+            continue
+        matplotlib.use(backend)
+        return
+    raise RuntimeError('无可用 GUI 后端（matplotlib 仅有无窗口的 Agg）。'
+                       '请在 serial/ 下执行 uv sync 安装 pyside6，'
+                       '或使用系统 Python（自带 tkinter）。')
+
+
 class LivePlot:
     """实时显示：上=最近若干包子载波幅度瀑布图，下=当前包幅度曲线（宽度自适应）。"""
 
     def __init__(self):
+        _use_gui_backend()
         import matplotlib.pyplot as plt
         self.plt = plt
         plt.ion()
@@ -331,9 +428,6 @@ class LivePlot:
         elif row.size > w:
             row = row[:w]
         self.hist = np.vstack([self.hist[1:], row[None, :]])
-        if self._line_width is None:
-            self._line_width = self.amp_now.size
-            self._build_lines()
 
     def refresh(self, rssi):
         vmax = max(10.0, float(self.hist.max()))
@@ -364,7 +458,7 @@ def reader_loop(ser, q, stop_event):
     carry = bytearray()
     while not stop_event.is_set():
         try:
-            chunk = ser.read(256)
+            chunk = ser.read(4096)   # 大块读：减少 GIL 竞争与系统调用次数
         except (serial.SerialException, OSError):
             break
         if not chunk:
@@ -441,30 +535,33 @@ class CsiCollector:
         """打开串口并启动读线程（整个采集进程只调用一次）。"""
         if self.device is None:
             self.device = autodetect_port(self.baud, self.probe_timeout)
-        try:
-            self.ser = serial.Serial(self.device, self.baud, bytesize=8,
-                                     parity='N', stopbits=1, timeout=0.05)
-        except serial.SerialException as e:
-            print(f'无法打开 {self.device}：{e}\n'
-                  f'请确认端口没有被 MobaXterm 等其他程序占用。')
-            sys.exit(1)
-        try:
-            self.ser.set_buffer_size(rx_size=256 * 1024)
-        except Exception:
-            pass
-        self.ser.reset_input_buffer()
+        # 绘图窗口先于串口创建：matplotlib 导入/建窗/首次渲染耗时可达秒级，
+        # 其间 GIL 被长时间占用，会饿死读线程；先建窗时还没有数据流，零丢失。
         if self.plot_enabled:
             try:
                 self.plot = LivePlot()
             except Exception as e:
                 print(f'实时绘图不可用（{e}），继续正常采集。')
                 self.plot = None
-        self.t_start = time.time()
-        self._t_last_save = self.t_start
+        try:
+            self.ser = serial.Serial(self.device, self.baud, bytesize=8,
+                                     parity='N', stopbits=1, timeout=0.05)
+        except serial.SerialException as e:
+            print(f'无法打开 {self.device}：{e}\n'
+                  f'请确认端口没有被其他程序占用（串口监视器/MobaXterm/minicom 等）；'
+                  f'Linux 下 Permission denied 见 README「Linux 串口权限」。')
+            sys.exit(1)
+        try:
+            self.ser.set_buffer_size(rx_size=256 * 1024)
+        except Exception:
+            pass
+        self.ser.reset_input_buffer()
         self.reader = threading.Thread(target=reader_loop,
                                        args=(self.ser, self.q, self.stop_event),
                                        daemon=True)
         self.reader.start()
+        self.t_start = time.time()
+        self._t_last_save = self.t_start
 
     def switch(self, stem, out_dir=None, label=None):
         """结束当前段并开启新文件组（毫秒级，不触碰串口）。返回上一段质量报告。
@@ -490,6 +587,7 @@ class CsiCollector:
         self.n_id_gaps = self.n_time_gaps = self.n_host_gaps = 0
         self._fw_ts = None
         self._host_ts = None
+        self._last_id = None    # 段间 id 大跳变不计入新段质量报告
         self._intervals = []
         self._host_intervals = []
         self._time_gap_warned = False
@@ -545,8 +643,11 @@ class CsiCollector:
             if self.writer is not None:
                 self.writer.snapshot()
             self._t_last_save = now
+        # 数据优先：解析积压时跳过本次重绘（渲染期间 GIL 被 C 端长时间持有，
+        # 读线程会被饿死，内核 tty 缓冲仅 ~4KB，溢出即丢包/错行）
         if (self.plot is not None and self.writer is not None
-                and self.n_packets and now - self._t_last_plot >= PLOT_REFRESH):
+                and self.n_packets and self.q.qsize() < 100
+                and now - self._t_last_plot >= PLOT_REFRESH):
             self.plot.refresh(self.writer.rssi[-1])
             self._t_last_plot = now
         if self.q.qsize() > 500 and not self._warned_backlog:
@@ -648,7 +749,8 @@ class CsiCollector:
 def parse_args():
     ap = argparse.ArgumentParser(
         description='实时采集 ESP32-S3 串口 CSI 数据并保存为深度学习数据集')
-    ap.add_argument('--port', help='串口名（默认自动选择 CH343 口）')
+    ap.add_argument('--port', help='串口名（Windows: COMx；Linux: /dev/ttyACM0 等；'
+                                   '默认自动选择 CH343/CH34x 口）')
     ap.add_argument('--baud', type=int, default=DEFAULT_BAUD,
                     help=f'波特率（默认 {DEFAULT_BAUD}）')
     ap.add_argument('--list-ports', action='store_true', help='列出系统串口后退出')
@@ -682,7 +784,9 @@ def main():
         pass
 
     if args.list_ports:
-        for p in list_all_ports():
+        ports = list_all_ports()
+        ports.sort(key=lambda p: not _is_ch34x(p))  # 稳定排序：CH34x 排前
+        for p in ports:
             mark = '  [CH34x]' if _is_ch34x(p) else ''
             print(f'  {p.device:10s} {p.description}{mark}')
         return
@@ -694,8 +798,9 @@ def main():
         label = args.label
     if label not in palette:
         palette.insert(0, label)
+    read_key = make_key_reader()
     print('标签面板: ' + ', '.join(f'{i}={s}' for i, s in enumerate(palette))
-          + ('（按数字键切换）' if HAS_MSVCRT else ''))
+          + ('（按数字键切换）' if read_key else ''))
 
     collector = CsiCollector(device=args.port, baud=args.baud,
                              probe_timeout=args.probe_timeout,
@@ -718,7 +823,7 @@ def main():
     print(f'  {writer.path_npz}')
 
     print(f'开始采集（{device} @ {args.baud}，8N1）。'
-          + ('按 q 或 Ctrl-C 结束。' if HAS_MSVCRT else '按 Ctrl-C 结束。'))
+          + ('按 q 或 Ctrl-C 结束。' if read_key else '按 Ctrl-C 结束。'))
 
     t_start = collector.t_start
     t_last_status = time.time()
@@ -743,11 +848,11 @@ def main():
                 pkts_prev = collector.n_packets
                 t_last_status = t_now
 
-            if HAS_MSVCRT and msvcrt.kbhit():
-                ch = msvcrt.getwch()
+            if read_key:
+                ch = read_key()
                 if ch in ('q', 'Q'):
                     stop_event.set()
-                elif ch.isdigit() and int(ch) < len(palette):
+                elif ch and ch.isdigit() and int(ch) < len(palette):
                     label = palette[int(ch)]
                     collector.current_label = label
 
