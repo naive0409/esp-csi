@@ -1,0 +1,15 @@
+[project]
+name = "csi-serial-tools"
+version = "0.1.0"
+description = "ESP32-S3 CSI 串口实时采集与数据集工具（仅本目录使用 uv 管理环境）"
+requires-python = ">=3.11"
+dependencies = [
+    "pyserial>=3.5",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "scipy>=1.10",
+    "pyfiglet>=1.0.4",
+]
+
+[tool.uv]
+package = false

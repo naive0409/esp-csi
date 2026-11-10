@@ -1,0 +1,9 @@
+# uv 虚拟环境
+.venv/
+
+# 采集输出数据
+csi_sessions/
+csi_actions/
+csi_log/
+
+__pycache__/

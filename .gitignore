@@ -87,3 +87,9 @@ docs/docusaurus/website/node_modules
 **/managed_components/
 **/*.lock
 **/.vscode
+
+examples/get-started/csi_send/build_pair2/
+examples/get-started/csi_send/build_pair/
+examples/get-started/csi_recv/build_pair2/
+examples/get-started/csi_recv/build_pair/
+.zcode
