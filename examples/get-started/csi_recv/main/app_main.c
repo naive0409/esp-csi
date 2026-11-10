@@ -26,7 +26,7 @@
 #include "esp_now.h"
 #include "esp_csi_gain_ctrl.h"
 
-#define CONFIG_LESS_INTERFERENCE_CHANNEL   11
+#define CONFIG_LESS_INTERFERENCE_CHANNEL   CONFIG_CSI_CHANNEL
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61 || (CONFIG_IDF_TARGET_ESP32C6 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0))
 #define CONFIG_WIFI_BAND_MODE               WIFI_BAND_MODE_2G_ONLY
 #define CONFIG_WIFI_2G_BANDWIDTHS           WIFI_BW_HT40
@@ -53,7 +53,12 @@
 #define ESP_IF_WIFI_STA ESP_MAC_WIFI_STA
 #endif
 
-static const uint8_t CONFIG_CSI_SEND_MAC[] = {0x1a, 0x00, 0x00, 0x00, 0x00, 0x00};
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 1, 0)
+#define WIFI_BW_HT20 WIFI_BW20
+#define WIFI_BW_HT40 WIFI_BW40
+#endif
+
+static const uint8_t CONFIG_CSI_SEND_MAC[] = {0x1a, 0x00, 0x00, 0x00, 0x00, CONFIG_CSI_PAIR_ID};
 static const char *TAG = "csi_recv";
 
 static void wifi_init()
@@ -248,9 +253,9 @@ static void wifi_csi_init()
     };
 #else
     wifi_csi_config_t csi_config = {
-        .lltf_en           = true,
-        .htltf_en          = true,
-        .stbc_htltf2_en    = true,
+        .lltf_en           = false,  // 不上报 LLTF（节省串口带宽；要恢复三段改回 true）
+        .htltf_en          = true,   // 只上报 HT-LTF（训练用段）
+        .stbc_htltf2_en    = false,  // 不上报 STBC-HT-LTF
         .ltf_merge_en      = true,
         .channel_filter_en = true,
         .manu_scale        = false,

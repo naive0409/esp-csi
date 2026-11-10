@@ -24,7 +24,7 @@
 #include "esp_netif.h"
 #include "esp_now.h"
 
-#define CONFIG_LESS_INTERFERENCE_CHANNEL   11
+#define CONFIG_LESS_INTERFERENCE_CHANNEL   CONFIG_CSI_CHANNEL
 
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61 || (CONFIG_IDF_TARGET_ESP32C6 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0))
 #define CONFIG_WIFI_BAND_MODE   WIFI_BAND_MODE_2G_ONLY
@@ -44,7 +44,12 @@
 #define ESP_IF_WIFI_STA ESP_MAC_WIFI_STA
 #endif
 
-static const uint8_t CONFIG_CSI_SEND_MAC[] = {0x1a, 0x00, 0x00, 0x00, 0x00, 0x00};
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 1, 0)
+#define WIFI_BW_HT20 WIFI_BW20
+#define WIFI_BW_HT40 WIFI_BW40
+#endif
+
+static const uint8_t CONFIG_CSI_SEND_MAC[] = {0x1a, 0x00, 0x00, 0x00, 0x00, CONFIG_CSI_PAIR_ID};
 static const char *TAG = "csi_send";
 
 static void wifi_init()

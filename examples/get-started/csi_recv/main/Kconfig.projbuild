@@ -1,0 +1,21 @@
+menu "CSI Pair Configuration"
+
+    config CSI_PAIR_ID
+        int "CSI pair ID (1-255, last byte of the pair MAC)"
+        range 1 255
+        default 1
+        help
+            Each sender/receiver pair must have a unique pair ID. The sender sets its
+            station MAC to 1a:00:00:00:00:<PAIR_ID>, and the receiver only accepts CSI
+            frames whose source MAC matches, so pairs do not pick up each other's CSI.
+
+    config CSI_CHANNEL
+        int "WiFi channel used by this pair (1-13)"
+        range 1 13
+        default 11
+        help
+            Pairs running at the same time and place should use different channels
+            (e.g. 1 / 6 / 11) to reduce co-channel interference. The sender and the
+            receiver of ONE pair must use the same channel.
+
+endmenu

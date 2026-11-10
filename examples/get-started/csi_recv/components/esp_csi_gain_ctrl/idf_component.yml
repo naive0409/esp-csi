@@ -1,0 +1,6 @@
+## Vendored local copy of espressif/esp_csi_gain_ctrl v0.1.5.
+## The registry package only ships prebuilt libs up to IDF 6.0; the 6.0
+## library is reused here so the example builds with ESP-IDF 6.1.
+version: "0.1.5"
+dependencies:
+  idf: ">=4.4.1"
